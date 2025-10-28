@@ -9,15 +9,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip input.zip and flatten
+      - name: Unzip any zip file and flatten
         run: |
           mkdir -p input
           mkdir -p input_temp
-          unzip -o input.zip -d input_temp
-          # 扁平化：将所有 txt 移动到 input/ 根目录
+          zip_file=$(ls *.zip | head -n 1)
+          echo "Detected zip file: $zip_file"
+          unzip -o "$zip_file" -d input_temp
+          # 扁平化：将所有 txt 移动到 input 根目录
           find input_temp -type f -name "*.txt" -exec mv {} input/ \;
           rm -rf input_temp
-          ls -R input
+          ls -R input  # 可选调试
 
       - name: Upload input files as artifact
         uses: actions/upload-artifact@v4
@@ -70,42 +72,25 @@ jobs:
           cp "${{ matrix.file }}" mail.txt
           python 365.py mail.txt
 
-      - name: Package per-job result and line count
+      - name: Package per-job result (single file)
         run: |
           mkdir -p per_job_output
-          ts=$(date +'%s%N')  # 纳秒时间戳
+          timestamp=$(date +'%Y%m%d_%H%M%S')
           base=$(basename "${{ matrix.file }}" .txt)
-
-          # 保存结果
-          outfile="per_job_output/success_results_${base}_${ts}.txt"
+          outfile="per_job_output/success_results_${base}_${timestamp}.txt"
           if [ -s success_results.txt ]; then
             cp success_results.txt "$outfile"
           else
             : > "$outfile"
           fi
-
-          # 生成行数文件，第一行隐藏时间戳
-          linefile="per_job_output/lines_${base}_${ts}.txt"
-          line_count=$(wc -l < "$outfile")
-          echo "$ts" > "$linefile"
-          echo "${base},${line_count}" >> "$linefile"
-
           echo "OUTFILE=$outfile" >> $GITHUB_ENV
-          echo "LINEFILE=$linefile" >> $GITHUB_ENV
-          echo "ARTIFACT_NAME=result-${base}-${ts}" >> $GITHUB_ENV
-          echo "LINE_ARTIFACT_NAME=lines-${base}-${ts}" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=result-${base}-${timestamp}" >> $GITHUB_ENV
 
       - name: Upload per-job result
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.OUTFILE }}
-
-      - name: Upload per-job line count
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.LINE_ARTIFACT_NAME }}
-          path: ${{ env.LINEFILE }}
 
   collect-results:
     needs: run-script
@@ -125,25 +110,14 @@ jobs:
           merged_file="merged_results/success_results_${timestamp}.txt"
 
           find all_results -type f -name "success_results_*.txt" -size +0c -exec cat {} + | sort -u > "$merged_file" || true
+
           echo "MERGED_FILE=$merged_file" >> $GITHUB_ENV
           echo "MERGED_TS=$timestamp" >> $GITHUB_ENV
 
-      - name: Merge line counts by job time
-        run: |
-          mkdir -p merged_results
-          line_file="merged_results/job-lines_${MERGED_TS}.txt"
-
-          # 合并所有行数文件，按隐藏时间戳排序
-          find all_results -type f -name "lines_*.txt" -exec cat {} + | \
-          awk 'NR%2==1 {ts=$1; next} NR%2==0 {print ts","$0}' | sort -n | cut -d',' -f2- > "$line_file"
-
-          echo "LINE_MERGED_FILE=$line_file" >> $GITHUB_ENV
-
-      - name: Set merged artifact names
+      - name: Set merged artifact name
         run: |
           base=$(basename "${MERGED_FILE}")
           echo "MERGED_ARTIFACT_NAME=merged-results-${base}" >> $GITHUB_ENV
-          echo "LINE_ARTIFACT_NAME=job-lines-${MERGED_TS}" >> $GITHUB_ENV
 
       - name: Commit merged results back
         run: |
@@ -158,9 +132,3 @@ jobs:
         with:
           name: ${{ env.MERGED_ARTIFACT_NAME }}
           path: ${{ env.MERGED_FILE }}
-
-      - name: Upload merged job line counts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.LINE_ARTIFACT_NAME }}
-          path: ${{ env.LINE_MERGED_FILE }}
