@@ -22,8 +22,7 @@ jobs:
 
       - name: Unzip any zip file and flatten
         run: |
-          mkdir -p input
-          mkdir -p input_temp
+          mkdir -p input input_temp
           zip_file=$(ls *.zip 2>/dev/null | head -n 1 || true)
           if [ -z "$zip_file" ]; then
             echo "No zip found, skipping unzip"
@@ -65,8 +64,6 @@ jobs:
       matrix: ${{ fromJSON(needs.discover-files.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -94,6 +91,7 @@ jobs:
             : > "$outfile"
           fi
 
+          # 删除已成功邮箱
           if [ -s success_results.txt ]; then
             grep -vxFf success_results.txt mail.txt > remaining.txt || true
           else
