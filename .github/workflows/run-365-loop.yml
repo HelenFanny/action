@@ -1,89 +1,150 @@
-name: Run 365.py Loop (10 rounds)
+name: Run 365.py for all txt files (Auto Loop 10 Rounds)
 
 on:
   workflow_dispatch:
+    inputs:
+      round:
+        description: "Current round number"
+        required: false
+        default: "1"
 
 jobs:
-  run-loop:
+  prepare-input:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Initialize loop
+      - name: Prepare input (use latest remaining or initial zip)
         run: |
-          echo "ROUND=1" > round.env
-          echo "TOTAL=10" >> round.env
-        shell: bash
+          mkdir -p input
+          # 若仓库中已有上轮 remaining 文件，则使用它
+          if ls merged_results/remaining_round_*.txt 1>/dev/null 2>&1; then
+            latest=$(ls -t merged_results/remaining_round_*.txt | head -n 1)
+            echo "🔁 Using previous remaining file: $latest"
+            cp "$latest" input/
+          elif ls *.zip 1>/dev/null 2>&1; then
+            echo "📦 Using initial zip"
+            mkdir -p input_temp
+            zip_file=$(ls *.zip | head -n 1)
+            unzip -o "$zip_file" -d input_temp
+            find input_temp -type f -name "*.txt" -exec mv {} input/ \;
+            rm -rf input_temp
+          else
+            echo "❌ No zip or remaining file found"
+            exit 1
+          fi
+          ls -R input
 
-      - name: Run 10 rounds sequentially
-        run: |
-          source round.env
-          TOTAL=10
-
-          for ((i=$ROUND; i<=$TOTAL; i++)); do
-            echo "============================"
-            echo "🚀 Starting round $i"
-            echo "============================"
-
-            # 解压或准备输入数据
-            if [ $i -eq 1 ]; then
-              if [ -f input.zip ]; then
-                mkdir -p input
-                unzip -o input.zip -d input
-                cat input/*.txt > input.txt
-              fi
-            fi
-
-            # 若前一轮已生成剩余文件，则用它作为输入
-            if [ -f remaining.txt ]; then
-              mv remaining.txt input.txt
-            fi
-
-            # 如果输入文件为空则停止循环
-            if [ ! -s input.txt ]; then
-              echo "✅ No data left to process. Ending at round $i"
-              break
-            fi
-
-            echo "Running 365.py..."
-            python3 365.py || true
-
-            echo "Removing processed lines..."
-            if [ -f success.txt ]; then
-              grep -vxFf success.txt input.txt > remaining.txt || cp input.txt remaining.txt
-            else
-              cp input.txt remaining.txt
-            fi
-
-            echo "Merging results..."
-            cat success.txt >> all_success.txt 2>/dev/null || true
-            sort -u all_success.txt -o all_success.txt
-
-            echo "Committing results..."
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git add all_success.txt remaining.txt
-            git commit -m "Round $i completed"
-            git push || true
-
-            echo "Round $i completed, sleeping before next..."
-            sleep 10
-          done
-
-          echo "🎯 All rounds completed!"
-        shell: bash
-
-      - name: Upload final results
+      - name: Upload input files as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: final-results
+          name: input-txt
+          path: input/
+
+  discover-files:
+    needs: prepare-input
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: input-txt
+          path: input/
+
+      - name: Find all txt files
+        id: set
+        run: |
+          files=$(find input -type f -name "*.txt" | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix={\"file\":$files}" >> $GITHUB_OUTPUT
+
+  run-script:
+    needs: discover-files
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.discover-files.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: input-txt
+          path: input/
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run script for file
+        run: |
+          base=$(basename "${{ matrix.file }}" .txt)
+          cp "${{ matrix.file }}" mail.txt
+          echo "▶️ Running 365.py for $base"
+          python 365.py mail.txt || true
+
+          # 如果生成 success_results.txt，就移除成功行
+          if [ -s success_results.txt ]; then
+            grep -vxFf success_results.txt mail.txt > remaining_${base}.txt || cp mail.txt remaining_${base}.txt
+          else
+            cp mail.txt remaining_${base}.txt
+          fi
+
+          mkdir -p per_job_output
+          timestamp=$(date +'%Y%m%d_%H%M%S')
+          cp success_results.txt "per_job_output/success_${base}_${timestamp}.txt" 2>/dev/null || touch "per_job_output/success_${base}_${timestamp}.txt"
+          cp remaining_${base}.txt "per_job_output/remaining_${base}_${timestamp}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.file }}
+          path: per_job_output/
+
+  collect-results:
+    needs: run-script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: all_results
+
+      - name: Merge and deduplicate
+        run: |
+          mkdir -p merged_results
+          timestamp=$(date +'%Y%m%d_%H%M%S')
+          round=${{ github.event.inputs.round }}
+          merged_file="merged_results/success_round_${round}_${timestamp}.txt"
+          remaining_file="merged_results/remaining_round_${round}_${timestamp}.txt"
+
+          find all_results -type f -name "success_*.txt" -exec cat {} + | sort -u > "$merged_file" || true
+          find all_results -type f -name "remaining_*.txt" -exec cat {} + | sort -u > "$remaining_file" || true
+
+          echo "MERGED_FILE=$merged_file" >> $GITHUB_ENV
+          echo "REMAINING_FILE=$remaining_file" >> $GITHUB_ENV
+          echo "MERGED_TS=$timestamp" >> $GITHUB_ENV
+
+      - name: Commit merged results
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add merged_results/
+          git commit -m "Round ${{ github.event.inputs.round }} results merged at ${{ env.MERGED_TS }}" || echo "No changes"
+          git push || true
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-results-round-${{ github.event.inputs.round }}
           path: |
-            all_success.txt
-            remaining.txt
+            ${{ env.MERGED_FILE }}
+            ${{ env.REMAINING_FILE }}
+
+      - name: Trigger next round (up to 10)
+        if: ${{ github.event.inputs.round < 10 }}
+        uses: peter-evans/workflow-dispatch@v1
+        with:
+          workflow: run-365-loop.yml
+          ref: main
+          inputs:
+            round: ${{ github.event.inputs.round + 1 }}
