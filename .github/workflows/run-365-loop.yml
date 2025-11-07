@@ -87,7 +87,6 @@ jobs:
           round=${{ github.event.inputs.round }}
           timestamp=$(date +'%Y%m%d_%H%M%S')
 
-          # 保存成功结果
           outfile="per_job_output/success_results_${base}_r${round}_${timestamp}.txt"
           if [ -s success_results.txt ]; then
             cp success_results.txt "$outfile"
@@ -95,7 +94,6 @@ jobs:
             : > "$outfile"
           fi
 
-          # 删除成功行，保留剩余未成功项
           if [ -s success_results.txt ]; then
             grep -vxFf success_results.txt mail.txt > remaining.txt || true
           else
@@ -136,9 +134,7 @@ jobs:
           round=${{ github.event.inputs.round }}
           timestamp=$(date +'%Y%m%d_%H%M%S')
           merged_file="merged_results/success_results_round_${round}_${timestamp}.txt"
-
           find all_results -type f -name "success_results_*.txt" -size +0c -exec cat {} + | sort -u > "$merged_file" || true
-
           echo "MERGED_FILE=$merged_file" >> $GITHUB_ENV
           echo "MERGED_TS=$timestamp" >> $GITHUB_ENV
           echo "ROUND=$round" >> $GITHUB_ENV
@@ -190,12 +186,12 @@ jobs:
             echo "continue=false" >> $GITHUB_ENV
 
       - name: Trigger next round (if under 10)
-        if: env.continue == 'true'
+        if: ${{ env.continue == 'true' }}
         uses: peter-evans/workflow-dispatch@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          workflow: run-365-loop.yml     # ✅ 文件名对应当前文件
+          workflow: run-365-loop.yml
           ref: ${{ github.ref }}
           inputs:
             round: ${{ env.NEXT_ROUND }}
