@@ -195,7 +195,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          workflow: Run 365.py for all txt files (Looped)
+          workflow: run-365-loop.yml     # ✅ 文件名对应当前文件
           ref: ${{ github.ref }}
           inputs:
             round: ${{ env.NEXT_ROUND }}
