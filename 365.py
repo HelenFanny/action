@@ -113,7 +113,7 @@ if __name__ == "__main__":
     ACCOUNT_FILE = "mail.txt"
     SUCCESS_FILE = "success_results.txt"
     FAILURE_FILE = "failure_results.txt"
-    MAX_THREADS = 10
+    MAX_THREADS = 20
     BUFFER_THRESHOLD = 5000  # 缓冲区阈值
     PROGRESS_INTERVAL = 5    # 进度刷新间隔(秒)
     
@@ -268,4 +268,5 @@ if __name__ == "__main__":
     if failure_count > 0:
         print(f"📝 失败账户已保存到: {FAILURE_FILE}")
     
+
     print("=" * 50)
