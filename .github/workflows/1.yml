@@ -1,0 +1,136 @@
+name: Run 365.py for all txt files (loop)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  prepare-input:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip any zip file and flatten
+        run: |
+          mkdir -p input
+          mkdir -p input_temp
+          zip_file=$(ls *.zip | head -n 1)
+          echo "Detected zip file: $zip_file"
+          unzip -o "$zip_file" -d input_temp
+          find input_temp -type f -name "*.txt" -exec mv {} input/ \;
+          rm -rf input_temp
+
+      - name: Upload input files as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: input-txt
+          path: input/
+
+  discover-files:
+    needs: prepare-input
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - name: Download input artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: input-txt
+          path: input/
+
+      - name: Find all txt files
+        id: set
+        run: |
+          files=$(find input -type f -name "*.txt" | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix={\"file\":$files}" >> $GITHUB_OUTPUT
+
+  run-script:
+    needs: discover-files
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover-files.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download input artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: input-txt
+          path: input/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Prepare mail.txt and run script
+        run: |
+          cp "${{ matrix.file }}" mail.txt
+          python 365.py mail.txt
+
+      - name: Package per-job result (single file)
+        run: |
+          mkdir -p per_job_output
+          timestamp=$(date +'%Y%m%d_%H%M%S')
+          base=$(basename "${{ matrix.file }}" .txt)
+          outfile="per_job_output/success_results_${base}_${timestamp}.txt"
+          if [ -s success_results.txt ]; then
+            cp success_results.txt "$outfile"
+          else
+            : > "$outfile"
+          fi
+          echo "OUTFILE=$outfile" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=result-${base}-${timestamp}" >> $GITHUB_ENV
+
+      - name: Upload per-job result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.OUTFILE }}
+
+  collect-results:
+    needs: run-script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all per-job results
+        uses: actions/download-artifact@v4
+        with:
+          path: all_results
+
+      - name: Merge results and remove duplicates
+        run: |
+          mkdir -p merged_results
+          timestamp=$(date +'%Y%m%d_%H%M%S')
+          merged_file="merged_results/success_results_${timestamp}.txt"
+          find all_results -type f -name "success_results_*.txt" -size +0c -exec cat {} + | sort -u > "$merged_file" || true
+          echo "MERGED_FILE=$merged_file" >> $GITHUB_ENV
+
+      - name: Commit merged results back
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add merged_results/
+          git commit -m "Add merged results ${{ env.MERGED_FILE }}" || echo "No changes to commit"
+          git push
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-results
+          path: ${{ env.MERGED_FILE }}
+
+      # 🔁 接力：本轮结束后，启动下一轮（新 Action）
+      - name: Trigger next run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sleep 120
+          gh workflow run "$GITHUB_WORKFLOW"
