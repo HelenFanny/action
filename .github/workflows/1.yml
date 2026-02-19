@@ -24,6 +24,7 @@ jobs:
           rm -rf input_temp
 
       - name: Upload input files as artifact
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: input-txt
@@ -36,6 +37,7 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - name: Download input artifact
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: input-txt
@@ -59,6 +61,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download input artifact
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: input-txt
@@ -89,6 +92,7 @@ jobs:
           echo "ARTIFACT_NAME=result-${base}-${timestamp}" >> $GITHUB_ENV
 
       - name: Upload per-job result
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -101,6 +105,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download all per-job results
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           path: all_results
@@ -110,6 +115,7 @@ jobs:
           mkdir -p merged_results
           timestamp=$(date +'%Y%m%d_%H%M%S')
           merged_file="merged_results/success_results_${timestamp}.txt"
+
           find all_results -type f -name "success_results_*.txt" -size +0c -exec cat {} + | sort -u > "$merged_file" || true
           echo "MERGED_FILE=$merged_file" >> $GITHUB_ENV
 
@@ -122,6 +128,7 @@ jobs:
           git push
 
       - name: Upload merged results
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: merged-results
@@ -129,6 +136,7 @@ jobs:
 
       # 🔁 接力：本轮结束后，启动下一轮（新 Action）
       - name: Trigger next run
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
