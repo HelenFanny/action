@@ -2,6 +2,8 @@ name: Run 365.py for all txt files (loop)
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [loop]
 
 permissions:
   contents: write
@@ -59,7 +61,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 3
       matrix: ${{ fromJSON(needs.discover-files.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +76,7 @@ jobs:
           for i in 1 2 3 4 5; do
             echo "Attempt $i to download artifact input-txt..."
             gh run download --name input-txt --dir input && break || true
-            sleep $((i*15))
+            sleep $((i*10))
           done
 
           if [ ! -d "input" ] || [ -z "$(find input -type f -name '*.txt' 2>/dev/null | head -n 1)" ]; then
@@ -156,10 +157,16 @@ jobs:
           name: merged-results
           path: ${{ env.MERGED_FILE }}
 
-      - name: Trigger next run
+      # 🔁 接力：用 repository_dispatch（更抗 actions 相关限流）
+      - name: Trigger next run (dispatch)
+        if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sleep 120
-          gh workflow run 1.yml || true
+          curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
+            -d '{"event_type":"loop"}' || true
